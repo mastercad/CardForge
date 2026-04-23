@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*-rc*"
+      - "v*.*.*"
+
+jobs:
+  qa:
+    name: QA (required before build)
+    uses: ./.github/workflows/qa.yml
+
+  build:
+    name: Build portable binary (${{ matrix.os }})
+    needs: qa
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            binary_name: cardforge-creater-linux
+          - os: windows-latest
+            platform: windows
+            binary_name: cardforge-creater-windows.exe
+          - os: macos-latest
+            platform: macos
+            binary_name: cardforge-creater-macos
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies (Linux only)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglib2.0-0 libegl1 libdbus-1-3
+
+      - name: Install package (with dev extras)
+        run: pip install --no-build-isolation -e ".[dev]"
+
+      - name: Build with PyInstaller
+        shell: bash
+        run: |
+          python -m PyInstaller \
+            --onefile \
+            --name ${{ matrix.binary_name }} \
+            --add-data "src/cardforge/i18n:cardforge/i18n" \
+            --collect-data qtawesome \
+            --collect-data reportlab \
+            main.py
+
+      - name: Upload binary as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary_name }}
+          path: dist/${{ matrix.binary_name }}*
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Create GitHub Release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          files: dist/**/*
